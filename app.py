@@ -5,11 +5,13 @@ import re
 import pandas as pd
 import time
 from fuzzywuzzy import process
+from concurrent.futures import ThreadPoolExecutor
 
 # Load secrets from Streamlit secrets.toml
 BASE_URL = st.secrets["TELEGRAM_BASE_URL"]
 START_POST = int(st.secrets["START_POST"])
 END_POST = int(st.secrets["END_POST"])
+MAX_THREADS = 10  # Number of concurrent requests
 
 # Set page config
 st.set_page_config(page_title="📌 מחפש עבודה בטלגרם", page_icon="🔍", layout="wide")
@@ -18,82 +20,77 @@ st.set_page_config(page_title="📌 מחפש עבודה בטלגרם", page_icon
 st.markdown(
     """
     <style>
-        body {
-            direction: rtl;
-            text-align: right;
-        }
-        .stTextInput > div > div > input {
-            text-align: right;
-        }
-        .stDataFrame {
-            direction: rtl;
-        }
-        .stButton > button {
-            font-size: 18px;
-            font-weight: bold;
-            background-color: #FF4B4B;
-            color: white;
-            width: 100%;
-        }
+        body { direction: rtl; text-align: right; }
+        .stTextInput > div > div > input { text-align: right; }
+        .stDataFrame { direction: rtl; }
+        .stButton > button { font-size: 18px; font-weight: bold; background-color: #FF4B4B; color: white; width: 100%; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # Function to download the HTML from a Telegram post
-def download_html(url):
-    """Downloads HTML from a given URL and returns the content."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.text
-    return None
+def download_html(post_id):
+    """Downloads HTML from a given post ID and returns the content."""
+    url = f"{BASE_URL}{post_id}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            return post_id, response.text
+    except requests.exceptions.RequestException:
+        return post_id, None
+    return post_id, None
 
 # Function to parse job ad details
-def parse_job_info(html_content):
+def parse_job_info(post_id, html_content):
     """Parses job ad number and multiple roles from the HTML content."""
+    if not html_content:
+        return None
+    
     try:
         soup = BeautifulSoup(html_content, "html.parser")
-
-        # Extract meta description content
         meta_desc = soup.find("meta", {"property": "og:description"})
         if not meta_desc:
-            return "לא נמצא", []
+            return None
 
         text_content = meta_desc["content"]
 
-        # Extract the job ad number
+        # Extract job ad number
         ad_number_match = re.search(r"מודעה מספר #(\d+)", text_content)
         ad_number = ad_number_match.group(1) if ad_number_match else "לא נמצא"
 
-        # Extract all roles
+        # Extract roles
         roles_section_match = re.search(r"(?:דרושים|דרוש|דרוש/ה)[^\n]*\n((?:\*\* .+\n)+)", text_content)
         roles = []
         if roles_section_match:
             roles_section = roles_section_match.group(1)
             roles = re.findall(r"\*\* (.+)", roles_section)
 
-        return ad_number, roles
+        return [(ad_number, role, f"{BASE_URL}{post_id}") for role in roles]
 
     except Exception as e:
-        return "שגיאה", [f"❌ שגיאת ניתוח: {str(e)}"]
+        return None
 
-# Function to scrape multiple job posts
+# Function to scrape multiple job posts concurrently
 @st.cache_data  # Efficient caching
-def scrape_jobs(start, end, base_url):
-    """Scrapes job posts and stores results in a DataFrame."""
+def scrape_jobs_concurrent(start, end):
+    """Scrapes job posts using multithreading and returns a DataFrame."""
     data = []
-    for post_id in range(start, end + 1):
-        url = f"{base_url}{post_id}"
-        html_content = download_html(url)
-        if html_content:
-            ad_number, roles = parse_job_info(html_content)
-            for role in roles:
-                data.append([ad_number, role, url])
+    
+    # Step 1: Download all pages concurrently
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        html_results = list(executor.map(download_html, range(start, end + 1)))
 
-        time.sleep(1)  # Prevent getting blocked
+    # Step 2: Parse job data concurrently
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        parsed_results = list(executor.map(lambda x: parse_job_info(x[0], x[1]), html_results))
+
+    # Step 3: Flatten results and create DataFrame
+    for result in parsed_results:
+        if result:
+            data.extend(result)
 
     df = pd.DataFrame(data, columns=["מספר מודעה", "תפקיד", "קישור"])
     return df
@@ -103,7 +100,7 @@ st.title("📌 מחפש עבודה בטלגרם")
 
 # Show loading spinner while scraping
 with st.spinner("🔄 טוען משרות חדשות..."):
-    df = scrape_jobs(START_POST, END_POST, BASE_URL)
+    df = scrape_jobs_concurrent(START_POST, END_POST)
 
 st.success("✅ כל המשרות נטענו בהצלחה!")
 
