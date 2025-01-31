@@ -43,20 +43,16 @@ st.markdown(
 )
 
 # -----------------------------------------------------------
-# HELPER: ESCAPE THE '⬅️' CHARACTER FOR REGEX
+# ESCAPE THE '⬅️' CHARACTER FOR REGEX
 # -----------------------------------------------------------
-# Some Telegram posts contain "⬅️" (arrow + variation selector).
-# Python 3.12 can misinterpret it as an inline "global" flag if not escaped.
 arrow_escaped = re.escape("⬅️")
 
 # -----------------------------------------------------------
 # REGEX PARSING FUNCTIONS
 # -----------------------------------------------------------
-
 def parse_ad_number(text: str) -> str:
     """
-    Extract 'מודעה מספר #XXXX' from text.
-    Return 'לא נמצא' if not found.
+    Extract 'מודעה מספר #XXXX' from text. If not found, return 'לא נמצא'.
     """
     match = re.search(r"מודעה\s*מספר\s*#(\d+)", text)
     return match.group(1) if match else "לא נמצא"
@@ -66,9 +62,7 @@ def parse_between(text: str, start_marker: str) -> str:
     """
     Extract single/multi-line fields like "<start_marker>: VALUE"
     until a dashed line, arrow, or end of string.
-    We use [\s\S] to match everything including newlines.
     """
-    # Example: "סוג יחידה: חי\"ר" up to next "\n- - -", or "\n⬅️", or end
     pattern = rf"{start_marker}\s*:\s*([\s\S]*?)(?=\n-+\s|\n{arrow_escaped}|$)"
     match = re.search(pattern, text)
     if match:
@@ -78,24 +72,22 @@ def parse_between(text: str, start_marker: str) -> str:
 
 def parse_section(text: str, section_title: str) -> str:
     """
-    Extract a multi-line section that starts with:
-      "⬅️ <section_title>:"
-    and continues until the next arrow or dashed line or end.
+    Extract a multi-line section starting with "⬅️ <section_title>:"
+    until the next arrow, dashed line, or end-of-string.
     """
     pattern = rf"{arrow_escaped}\s*{section_title}\s*:\s*([\s\S]*?)(?=\n{arrow_escaped}|\n-+\s|$)"
     match = re.search(pattern, text)
     if not match:
         return ""
     extracted = match.group(1).strip()
-    # Remove trailing dashed lines if any:
     extracted = re.sub(r"-+\s*", "", extracted).strip()
     return extracted
 
 
 def parse_roles(text: str) -> list:
     """
-    Extract roles listed after "⬅️ דרושים:" as lines starting with "** ".
-    Returns a list of role strings, or an empty list if none found.
+    Parse roles from the "⬅️ דרושים:" section, each line typically "** " prefix.
+    Return a list of roles or empty list if none found.
     """
     pattern = rf"{arrow_escaped}\s*דרושים\s*:\s*([\s\S]*?)(?=\n{arrow_escaped}|\n-+\s|$)"
     match = re.search(pattern, text)
@@ -110,8 +102,8 @@ def parse_roles(text: str) -> list:
 
 def parse_job_info(post_id: int, html_content: str):
     """
-    Given (post_id, raw HTML), parse all fields from the og:description.
-    Returns a list of row dicts (one per role) or None if invalid.
+    Given HTML for a Telegram post, parse out the relevant fields.
+    Return a list of row dicts (one row per role).
     """
     if not html_content:
         return None
@@ -123,7 +115,7 @@ def parse_job_info(post_id: int, html_content: str):
 
     text_content = meta_desc["content"]
 
-    # ----- Parse out fields -----
+    # --- Parse fields ---
     ad_number = parse_ad_number(text_content)
     sug_yehida = parse_between(text_content, "סוג יחידה")
     area = parse_between(text_content, "אזור בארץ")
@@ -133,14 +125,13 @@ def parse_job_info(post_id: int, html_content: str):
     service_terms = parse_section(text_content, "תנאי שירות")
     next_service = parse_between(text_content, "תקופת שירות הקרובה")
 
-    # Check for "⏰" (immediate recruitment)
+    # Immediate recruitment
     immediate = "כן" if "⏰" in text_content else "לא"
 
-    # Check for "🔊 זמני או קבוע"
+    # Temporary or permanent
     recruitment_type = "זמני או קבוע" if "🔊 זמני או קבוע" in text_content else ""
 
     if not roles:
-        # If no roles found, provide a placeholder row
         roles = ["לא צוינו תפקידים"]
 
     results = []
@@ -162,14 +153,12 @@ def parse_job_info(post_id: int, html_content: str):
 
     return results
 
-
 # -----------------------------------------------------------
 # SCRAPING WITH MULTITHREADING
 # -----------------------------------------------------------
 def download_html(post_id: int):
     """
-    Download HTML for a given post ID, returning (post_id, html_content)
-    or (post_id, None) on failure.
+    Download HTML for a given post ID, returning (post_id, html_content).
     """
     url = f"{BASE_URL}{post_id}"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -185,22 +174,19 @@ def download_html(post_id: int):
 @st.cache_data
 def scrape_jobs_concurrent(start_id: int, end_id: int) -> pd.DataFrame:
     """
-    Multithreaded: 
-      1) Download all HTML pages for post IDs [start_id..end_id]
-      2) Parse data 
-      3) Combine into a single DataFrame
+    Download and parse all posts in [start_id..end_id] concurrently.
+    Returns a DataFrame of job postings.
     """
     data = []
-
-    # Step 1: Download concurrently
+    # 1) Download
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         html_results = list(executor.map(download_html, range(start_id, end_id + 1)))
 
-    # Step 2: Parse concurrently
+    # 2) Parse
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         parsed_lists = list(executor.map(lambda x: parse_job_info(x[0], x[1]), html_results))
 
-    # Step 3: Flatten
+    # 3) Flatten
     for plist in parsed_lists:
         if plist:
             data.extend(plist)
@@ -213,54 +199,54 @@ def scrape_jobs_concurrent(start_id: int, end_id: int) -> pd.DataFrame:
 # -----------------------------------------------------------
 st.title("📌 חיפוש הזדמנויות גיוס")
 
-# 1) Scrape data once (cached)
+# 1) Scrape data (cached)
 with st.spinner("🔄 טוען מודעות..."):
     df = scrape_jobs_concurrent(START_POST, END_POST)
 
 st.success("✅ כל המודעות נטענו בהצלחה!")
 
-# 2) Filter / Search UI
+# 2) Filters + Search
 st.header("סינון וחיפוש")
 
 search_query = st.text_input("🔎 חיפוש חופשי (בכל השדות):", "")
 
 filtered_df = df.copy()
+
 if search_query.strip():
-    # Simple substring search across row values
+    # Substring search across row values
     mask = filtered_df.apply(
         lambda row: search_query.lower() in " ".join(str(v).lower() for v in row.values),
         axis=1
     )
     filtered_df = filtered_df[mask]
 
-# Optional: filter by אזור בארץ
+# Dropdown for אזור בארץ
 all_areas = ["(הכל)"] + sorted(set(filtered_df["אזור בארץ"].dropna()))
 selected_area = st.selectbox("סינון לפי אזור בארץ:", all_areas, index=0)
 if selected_area != "(הכל)":
     filtered_df = filtered_df[filtered_df["אזור בארץ"] == selected_area]
 
-# Optional: filter by סוג יחידה
+# Dropdown for סוג יחידה
 all_units = ["(הכל)"] + sorted(set(filtered_df["סוג יחידה"].dropna()))
 selected_unit = st.selectbox("סינון לפי סוג יחידה:", all_units, index=0)
 if selected_unit != "(הכל)":
     filtered_df = filtered_df[filtered_df["סוג יחידה"] == selected_unit]
 
-# Optional: filter by גיוס מיידי
+# Dropdown for גיוס מיידי
 immediate_opts = ["(הכל)", "כן", "לא"]
 selected_immediate = st.selectbox("סינון לפי גיוס מיידי:", immediate_opts, index=0)
 if selected_immediate != "(הכל)":
     filtered_df = filtered_df[filtered_df["גיוס מיידי"] == selected_immediate]
 
-# Show results
+# 3) Show results as a list (role + link)
 st.write(f"נמצאו {len(filtered_df)} תוצאות:")
-st.dataframe(filtered_df)
 
-# Optionally, show expanders for each row:
-# for idx, row in filtered_df.iterrows():
-#     with st.expander(f"📌 {row['תפקיד']} (מודעה #{row['מספר מודעה']})"):
-#         for col in [
-#             "תפקיד", "סוג יחידה", "אזור בארץ", "כישורים נדרשים",
-#             "פרטים על היחידה", "תנאי שירות", "תקופת שירות קרובה",
-#             "גיוס מיידי", "סוג גיוס", "קישור"
-#         ]:
-#             st.write(f"**{col}:** {row[col]}")
+if len(filtered_df) == 0:
+    st.warning("לא נמצאו תפקידים במערכת התואמים לסינון שלך.")
+else:
+    for idx, row in filtered_df.iterrows():
+        ad_number = row["מספר מודעה"]
+        role = row["תפקיד"]
+        link = row["קישור"]
+        st.markdown(f"- **{role}** (מודעה #{ad_number}): [קישור לפרטים]({link})")
+
