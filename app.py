@@ -3,9 +3,10 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import pandas as pd
-import time
-from fuzzywuzzy import process
 from concurrent.futures import ThreadPoolExecutor
+
+# For fuzzy search:
+from fuzzywuzzy import fuzz
 
 # -----------------------------------------------------------
 # LOAD SECRETS
@@ -103,6 +104,7 @@ def parse_job_info(post_id: int, html_content: str):
     """
     Given HTML for a Telegram post, parse out the relevant fields.
     Return a list of row dicts (one row per role).
+    If there's no valid ad number, return None to skip it.
     """
     if not html_content:
         return None
@@ -116,6 +118,10 @@ def parse_job_info(post_id: int, html_content: str):
 
     # --- Parse fields ---
     ad_number = parse_ad_number(text_content)
+    if ad_number == "לא נמצא":
+        # Skip this ad entirely if it doesn't have a valid #XXXX
+        return None
+
     sug_yehida = parse_between(text_content, "סוג יחידה")
     area = parse_between(text_content, "אזור בארץ")
     roles = parse_roles(text_content)
@@ -192,28 +198,33 @@ def scrape_jobs_concurrent(start_id: int, end_id: int) -> pd.DataFrame:
 
     return pd.DataFrame(data)
 
+# -----------------------------------------------------------
+# FUZZY MATCH HELPER
+# -----------------------------------------------------------
+def fuzzy_score_row(row, query):
+    """
+    Combine all row values into one string, 
+    compute partial-ratio score with the query.
+    Return the fuzzy score (0..100).
+    """
+    row_text = " ".join(str(v) for v in row.values).lower()
+    return fuzz.partial_ratio(query.lower(), row_text)
 
 # -----------------------------------------------------------
 # MAIN APP
 # -----------------------------------------------------------
 st.title("📌 חיפוש הזדמנויות גיוס")
 
-# 1) Scrape data (cached)
 with st.spinner("🔄 טוען מודעות..."):
     df = scrape_jobs_concurrent(START_POST, END_POST)
 
 st.success("✅ כל המודעות נטענו בהצלחה!")
 
-# 2) Filters + Search
 st.header("סינון וחיפוש")
 
 search_query = st.text_input("🔎 חיפוש חופשי (בכל השדות):", "")
 
-selected_area = None
-selected_unit = None
-selected_immediate = None
-
-# We define the main dropdowns but won't do filtering yet:
+# Define dropdowns, but no filtering yet
 all_areas = ["(הכל)"] + sorted(set(df["אזור בארץ"].dropna()))
 selected_area = st.selectbox("סינון לפי אזור בארץ:", all_areas, index=0)
 
@@ -223,10 +234,6 @@ selected_unit = st.selectbox("סינון לפי סוג יחידה:", all_units, 
 immediate_opts = ["(הכל)", "כן", "לא"]
 selected_immediate = st.selectbox("סינון לפי גיוס מיידי:", immediate_opts, index=0)
 
-
-# -------------------------------
-# If no search or filter, show info & exit
-# -------------------------------
 filters_used = (
     search_query.strip() != "" or
     selected_area != "(הכל)" or
@@ -235,24 +242,21 @@ filters_used = (
 )
 
 if not filters_used:
-    # User didn't do any filtering or searching
     st.info("אנא הזן חיפוש או הגדר סינון כדי לראות תוצאות.")
-    st.stop()  # Stop here, do not show any results
+    st.stop()
 
-# -------------------------------
-# Actually apply the filters
-# -------------------------------
+# Filter the data
 filtered_df = df.copy()
 
-# Search filter
+# 1) Fuzzy search (if user typed anything)
 if search_query.strip():
-    mask = filtered_df.apply(
-        lambda row: search_query.lower() in " ".join(str(v).lower() for v in row.values),
-        axis=1
-    )
-    filtered_df = filtered_df[mask]
+    # For each row, compute partial-ratio score (0..100)
+    # Keep rows above a threshold, e.g. 70
+    threshold = 70
+    scores = filtered_df.apply(lambda r: fuzzy_score_row(r, search_query), axis=1)
+    filtered_df = filtered_df[scores >= threshold]
 
-# Dropdown filters
+# 2) Dropdown filters
 if selected_area != "(הכל)":
     filtered_df = filtered_df[filtered_df["אזור בארץ"] == selected_area]
 
@@ -262,7 +266,6 @@ if selected_unit != "(הכל)":
 if selected_immediate != "(הכל)":
     filtered_df = filtered_df[filtered_df["גיוס מיידי"] == selected_immediate]
 
-# Show results as a list if any
 st.write(f"נמצאו {len(filtered_df)} תוצאות:")
 
 if len(filtered_df) == 0:
