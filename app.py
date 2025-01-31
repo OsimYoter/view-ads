@@ -14,7 +14,7 @@ END_POST = int(st.secrets["END_POST"])
 MAX_THREADS = 10  # Number of concurrent requests
 
 # Set page config
-st.set_page_config(page_title="📌 מחפש עבודה בטלגרם", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="📌 חיפוש הזדמנויות גיוס", page_icon="🔍", layout="wide")
 
 # Apply custom RTL style
 st.markdown(
@@ -96,7 +96,7 @@ def scrape_jobs_concurrent(start, end):
     return df
 
 # --- UI ---
-st.title("📌 מחפש עבודה בטלגרם")
+st.title("📌 חיפוש הזדמנויות גיוס")
 
 # Show loading spinner while scraping
 with st.spinner("🔄 טוען משרות חדשות..."):
