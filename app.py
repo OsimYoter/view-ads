@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import pandas as pd
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 # For fuzzy search:
@@ -47,6 +48,23 @@ st.markdown(
 # ESCAPE THE '⬅️' CHARACTER FOR REGEX
 # -----------------------------------------------------------
 arrow_escaped = re.escape("⬅️")
+
+# -----------------------------------------------------------
+# TEXT NORMALIZATION FOR HEBREW
+# -----------------------------------------------------------
+def normalize_hebrew(text: str) -> str:
+    """
+    Normalize Hebrew text so fuzzy matching is more reliable.
+    1) Unicode normalize (NFKC).
+    2) Remove special quotes (e.g. '״', '"', and "'").
+    3) Return the cleaned string.
+    """
+    # 1) Unicode normalize
+    text = unicodedata.normalize('NFKC', text)
+    # 2) Remove quotes
+    for ch in ['״', '"', "'"]:
+        text = text.replace(ch, "")
+    return text
 
 # -----------------------------------------------------------
 # REGEX PARSING FUNCTIONS
@@ -158,6 +176,7 @@ def parse_job_info(post_id: int, html_content: str):
 
     return results
 
+
 # -----------------------------------------------------------
 # SCRAPING WITH MULTITHREADING
 # -----------------------------------------------------------
@@ -203,12 +222,14 @@ def scrape_jobs_concurrent(start_id: int, end_id: int) -> pd.DataFrame:
 # -----------------------------------------------------------
 def fuzzy_score_row(row, query):
     """
-    Combine all row values into one string, 
-    compute partial-ratio score with the query.
-    Return the fuzzy score (0..100).
+    Combine all row values into one normalized string,
+    compute partial-ratio score with the normalized query.
     """
-    row_text = " ".join(str(v) for v in row.values).lower()
-    return fuzz.partial_ratio(query.lower(), row_text)
+    row_text = " ".join(str(v) for v in row.values)
+    row_text = normalize_hebrew(row_text)
+    query = normalize_hebrew(query)
+
+    return fuzz.partial_ratio(query.lower(), row_text.lower())
 
 # -----------------------------------------------------------
 # MAIN APP
@@ -234,6 +255,7 @@ selected_unit = st.selectbox("סינון לפי סוג יחידה:", all_units, 
 immediate_opts = ["(הכל)", "כן", "לא"]
 selected_immediate = st.selectbox("סינון לפי גיוס מיידי:", immediate_opts, index=0)
 
+# If no filters or query, show message and stop
 filters_used = (
     search_query.strip() != "" or
     selected_area != "(הכל)" or
@@ -251,8 +273,7 @@ filtered_df = df.copy()
 # 1) Fuzzy search (if user typed anything)
 if search_query.strip():
     # For each row, compute partial-ratio score (0..100)
-    # Keep rows above a threshold, e.g. 70
-    threshold = 70
+    threshold = 70  # Adjust as you wish
     scores = filtered_df.apply(lambda r: fuzzy_score_row(r, search_query), axis=1)
     filtered_df = filtered_df[scores >= threshold]
 
