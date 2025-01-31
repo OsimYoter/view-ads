@@ -1,7 +1,8 @@
+
+
 streamlit
 requests
 beautifulsoup4
 pandas
 openpyxl
-fuzzywuzzy
-python-Levenshtein
+fuzzywuzzy[speedup]  # includes python-Levenshtein for faster fuzzy matching
