@@ -79,11 +79,20 @@ def parse_ad_number(text: str) -> str:
     return match.group(1) if match else "לא נמצא"
 
 def parse_between(text: str, start_marker: str) -> str:
+    """
+    General 'between' parser for lines like:
+        <start_marker>: <value>
+    up to a dashed line or arrow or end of string.
+    """
     pattern = rf"{start_marker}\s*:\s*([\s\S]*?)(?=\n-+\s|\n{arrow_escaped}|$)"
     m = re.search(pattern, text)
     return m.group(1).strip() if m else ""
 
 def parse_section(text: str, section_title: str) -> str:
+    """
+    For multiline sections that start with "⬅️ <section_title>:"
+    until next arrow or dashes or end.
+    """
     pattern = rf"{arrow_escaped}\s*{section_title}\s*:\s*([\s\S]*?)(?=\n{arrow_escaped}|\n-+\s|$)"
     m = re.search(pattern, text)
     if not m:
@@ -113,11 +122,13 @@ def parse_job_info(post_id: int, html_content: str):
         return None
 
     text_content = meta_desc["content"]
+
+    # 1) Must have מודעה מספר #XXXX
     ad_number = parse_ad_number(text_content)
     if ad_number == "לא נמצא":
-        # skip if no ad number
-        return None
+        return None  # skip if no ad number
 
+    # 2) Extract fields
     sug_yehida = parse_between(text_content, "סוג יחידה")
     area = parse_between(text_content, "אזור בארץ")
     roles = parse_roles(text_content)
@@ -125,10 +136,16 @@ def parse_job_info(post_id: int, html_content: str):
     unit_info = parse_section(text_content, "פרטים על היחידה")
     service_terms = parse_section(text_content, "תנאי שירות")
 
-    # parse service period
+    # 3) Remove "אזור בארץ..." from the סוג יחידה text if present
+    #    e.g. "בה\"ד אזור בארץ: צפון" => "בה\"ד"
+    if "אזור בארץ:" in sug_yehida:
+        sug_yehida = sug_yehida.split("אזור בארץ:")[0].strip()
+
+    # 4) Service period
     service_period_raw = parse_between(text_content, "תקופת שירות הקרובה")
     month_start, month_end = parse_service_period(service_period_raw)
 
+    # 5) Immediate, recruitment type
     immediate = "כן" if "⏰" in text_content else "לא"
     recruitment_type = "זמני או קבוע" if "🔊 זמני או קבוע" in text_content else ""
 
@@ -140,7 +157,7 @@ def parse_job_info(post_id: int, html_content: str):
         row = {
             "מספר מודעה": ad_number,
             "תפקיד": role,
-            "סוג יחידה": sug_yehida,
+            "סוג יחידה": sug_yehida,      # now stripped of trailing "אזור בארץ:"
             "אזור בארץ": area,
             "כישורים נדרשים": qualifications,
             "פרטים על היחידה": unit_info,
