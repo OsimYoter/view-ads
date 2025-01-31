@@ -93,7 +93,6 @@ def parse_roles(text: str) -> list:
     match = re.search(pattern, text)
     if not match:
         return []
-
     roles_section = match.group(1)
     # Lines that start with "**"
     roles_list = re.findall(r"\*\*\s*(.+)", roles_section)
@@ -210,43 +209,67 @@ st.header("סינון וחיפוש")
 
 search_query = st.text_input("🔎 חיפוש חופשי (בכל השדות):", "")
 
+selected_area = None
+selected_unit = None
+selected_immediate = None
+
+# We define the main dropdowns but won't do filtering yet:
+all_areas = ["(הכל)"] + sorted(set(df["אזור בארץ"].dropna()))
+selected_area = st.selectbox("סינון לפי אזור בארץ:", all_areas, index=0)
+
+all_units = ["(הכל)"] + sorted(set(df["סוג יחידה"].dropna()))
+selected_unit = st.selectbox("סינון לפי סוג יחידה:", all_units, index=0)
+
+immediate_opts = ["(הכל)", "כן", "לא"]
+selected_immediate = st.selectbox("סינון לפי גיוס מיידי:", immediate_opts, index=0)
+
+
+# -------------------------------
+# If no search or filter, show info & exit
+# -------------------------------
+filters_used = (
+    search_query.strip() != "" or
+    selected_area != "(הכל)" or
+    selected_unit != "(הכל)" or
+    selected_immediate != "(הכל)"
+)
+
+if not filters_used:
+    # User didn't do any filtering or searching
+    st.info("אנא הזן חיפוש או הגדר סינון כדי לראות תוצאות.")
+    st.stop()  # Stop here, do not show any results
+
+# -------------------------------
+# Actually apply the filters
+# -------------------------------
 filtered_df = df.copy()
 
+# Search filter
 if search_query.strip():
-    # Substring search across row values
     mask = filtered_df.apply(
         lambda row: search_query.lower() in " ".join(str(v).lower() for v in row.values),
         axis=1
     )
     filtered_df = filtered_df[mask]
 
-# Dropdown for אזור בארץ
-all_areas = ["(הכל)"] + sorted(set(filtered_df["אזור בארץ"].dropna()))
-selected_area = st.selectbox("סינון לפי אזור בארץ:", all_areas, index=0)
+# Dropdown filters
 if selected_area != "(הכל)":
     filtered_df = filtered_df[filtered_df["אזור בארץ"] == selected_area]
 
-# Dropdown for סוג יחידה
-all_units = ["(הכל)"] + sorted(set(filtered_df["סוג יחידה"].dropna()))
-selected_unit = st.selectbox("סינון לפי סוג יחידה:", all_units, index=0)
 if selected_unit != "(הכל)":
     filtered_df = filtered_df[filtered_df["סוג יחידה"] == selected_unit]
 
-# Dropdown for גיוס מיידי
-immediate_opts = ["(הכל)", "כן", "לא"]
-selected_immediate = st.selectbox("סינון לפי גיוס מיידי:", immediate_opts, index=0)
 if selected_immediate != "(הכל)":
     filtered_df = filtered_df[filtered_df["גיוס מיידי"] == selected_immediate]
 
-# 3) Show results as a list (role + link)
+# Show results as a list if any
 st.write(f"נמצאו {len(filtered_df)} תוצאות:")
 
 if len(filtered_df) == 0:
-    st.warning("לא נמצאו תפקידים במערכת התואמים לסינון שלך.")
+    st.warning("לא נמצאו תפקידים במערכת התואמים לחיפוש / סינון שלך.")
 else:
     for idx, row in filtered_df.iterrows():
         ad_number = row["מספר מודעה"]
         role = row["תפקיד"]
         link = row["קישור"]
         st.markdown(f"- **{role}** (מודעה #{ad_number}): [קישור לפרטים]({link})")
-
