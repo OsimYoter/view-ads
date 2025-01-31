@@ -217,9 +217,6 @@ selected_area = st.selectbox("סינון לפי אזור בארץ:", all_areas, 
 all_units = ["(הכל)"] + sorted(set(df["סוג יחידה"].dropna()))
 selected_unit = st.selectbox("סינון לפי סוג יחידה:", all_units, index=0)
 
-immediate_opts = ["(הכל)", "כן", "לא"]
-selected_immediate = st.selectbox("סינון לפי גיוס מיידי:", immediate_opts, index=0)
-
 # new month filters
 all_start_months = ["(הכל)"] + sorted(set(df["חודש התחלה"].dropna()))
 selected_month_start = st.selectbox("סינון לפי חודש התחלה:", all_start_months, index=0)
@@ -232,7 +229,6 @@ filters_used = (
     search_query.strip() != "" or
     selected_area != "(הכל)" or
     selected_unit != "(הכל)" or
-    selected_immediate != "(הכל)" or
     selected_month_start != "(הכל)" or
     selected_month_end != "(הכל)"
 )
@@ -258,9 +254,6 @@ if selected_area != "(הכל)":
 
 if selected_unit != "(הכל)":
     filtered_df = filtered_df[filtered_df["סוג יחידה"] == selected_unit]
-
-if selected_immediate != "(הכל)":
-    filtered_df = filtered_df[filtered_df["גיוס מיידי"] == selected_immediate]
 
 if selected_month_start != "(הכל)":
     filtered_df = filtered_df[filtered_df["חודש התחלה"] == selected_month_start]
