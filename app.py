@@ -5,26 +5,20 @@ import re
 import pandas as pd
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
-
-# For fuzzy search:
 from fuzzywuzzy import fuzz
 
-# -----------------------------------------------------------
+# -----------------------------
 # LOAD SECRETS
-# -----------------------------------------------------------
+# -----------------------------
 BASE_URL = st.secrets["TELEGRAM_BASE_URL"]
 START_POST = int(st.secrets["START_POST"])
 END_POST = int(st.secrets["END_POST"])
-MAX_THREADS = 10  # Number of concurrent requests
+MAX_THREADS = 10  # concurrency level
 
-# -----------------------------------------------------------
-# PAGE CONFIG & CUSTOM STYLE
-# -----------------------------------------------------------
-st.set_page_config(
-    page_title="📌 חיפוש הזדמנויות גיוס",
-    page_icon="🔍",
-    layout="wide"
-)
+# -----------------------------
+# PAGE CONFIG & STYLING
+# -----------------------------
+st.set_page_config(page_title="📌 חיפוש הזדמנויות גיוס", page_icon="🔍", layout="wide")
 
 st.markdown(
     """
@@ -44,106 +38,72 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# -----------------------------------------------------------
-# ESCAPE THE '⬅️' CHARACTER FOR REGEX
-# -----------------------------------------------------------
+# -----------------------------
+# ESCAPE THE '⬅️' CHARACTER
+# -----------------------------
 arrow_escaped = re.escape("⬅️")
 
-# -----------------------------------------------------------
-# TEXT NORMALIZATION FOR HEBREW (Fuzzy Searching)
-# -----------------------------------------------------------
+# -----------------------------
+# NORMALIZE HEBREW (for fuzzy search)
+# -----------------------------
 def normalize_hebrew(text: str) -> str:
     """
-    Normalize Hebrew text so fuzzy matching is more reliable.
-    1) Unicode normalize (NFKC).
-    2) Remove special quotes (e.g. '״', '"', and "'").
-    3) Return the cleaned string.
+    1) NFKC normalization
+    2) Remove quotes (״, ", ')
     """
-    # 1) Unicode normalize
     text = unicodedata.normalize('NFKC', text)
-    # 2) Remove quotes
     for ch in ['״', '"', "'"]:
         text = text.replace(ch, "")
     return text
 
-# -----------------------------------------------------------
-# PARSE SERVICE PERIOD (Months)
-# -----------------------------------------------------------
+# -----------------------------
+# PARSE SERVICE PERIOD MONTHS
+# -----------------------------
 def parse_service_period(text: str) -> (str, str):
     """
-    If text is in the format "מרץ - אפריל",
-    return (start_month, end_month). Otherwise ('', '').
-    Example:
-      text = "מרץ - אפריל" => ("מרץ", "אפריל")
-      text = "ינואר-פברואר" => ("ינואר", "פברואר")
+    If text looks like "מרץ - אפריל", return ("מרץ", "אפריל").
+    Otherwise ("", "").
     """
     text = text.strip()
-    # For example "מרץ - אפריל"
-    # We'll look for "X - Y" with optional spaces
     pattern = r"^\s*(\S+)\s*-\s*(\S+)\s*$"
     match = re.search(pattern, text)
     if match:
         return match.group(1), match.group(2)
     return "", ""
 
-# -----------------------------------------------------------
-# REGEX PARSING FUNCTIONS
-# -----------------------------------------------------------
+# -----------------------------
+# REGEX PARSING
+# -----------------------------
 def parse_ad_number(text: str) -> str:
-    """
-    Extract 'מודעה מספר #XXXX' from text. If not found, return 'לא נמצא'.
-    """
     match = re.search(r"מודעה\s*מספר\s*#(\d+)", text)
     return match.group(1) if match else "לא נמצא"
 
-
 def parse_between(text: str, start_marker: str) -> str:
-    """
-    Extract single/multi-line fields like "<start_marker>: VALUE"
-    until a dashed line, arrow, or end of string.
-    """
     pattern = rf"{start_marker}\s*:\s*([\s\S]*?)(?=\n-+\s|\n{arrow_escaped}|$)"
-    match = re.search(pattern, text)
-    if match:
-        return match.group(1).strip()
-    return ""
-
+    m = re.search(pattern, text)
+    return m.group(1).strip() if m else ""
 
 def parse_section(text: str, section_title: str) -> str:
-    """
-    Extract a multi-line section starting with "⬅️ <section_title>:"
-    until the next arrow, dashed line, or end-of-string.
-    """
     pattern = rf"{arrow_escaped}\s*{section_title}\s*:\s*([\s\S]*?)(?=\n{arrow_escaped}|\n-+\s|$)"
-    match = re.search(pattern, text)
-    if not match:
+    m = re.search(pattern, text)
+    if not m:
         return ""
-    extracted = match.group(1).strip()
-    extracted = re.sub(r"-+\s*", "", extracted).strip()
+    extracted = re.sub(r"-+\s*", "", m.group(1)).strip()
     return extracted
 
-
 def parse_roles(text: str) -> list:
-    """
-    Parse roles from the "⬅️ דרושים:" section, each line typically "** " prefix.
-    Return a list of roles or empty list if none found.
-    """
     pattern = rf"{arrow_escaped}\s*דרושים\s*:\s*([\s\S]*?)(?=\n{arrow_escaped}|\n-+\s|$)"
-    match = re.search(pattern, text)
-    if not match:
+    m = re.search(pattern, text)
+    if not m:
         return []
-    roles_section = match.group(1)
-    # Lines that start with "**"
+    roles_section = m.group(1)
     roles_list = re.findall(r"\*\*\s*(.+)", roles_section)
     return [r.strip() for r in roles_list]
 
-
+# -----------------------------
+# parse_job_info
+# -----------------------------
 def parse_job_info(post_id: int, html_content: str):
-    """
-    Given HTML for a Telegram post, parse out the relevant fields.
-    Return a list of row dicts (one row per role).
-    If there's no valid ad number, return None to skip it.
-    """
     if not html_content:
         return None
 
@@ -153,11 +113,9 @@ def parse_job_info(post_id: int, html_content: str):
         return None
 
     text_content = meta_desc["content"]
-
-    # --- Parse fields ---
     ad_number = parse_ad_number(text_content)
     if ad_number == "לא נמצא":
-        # Skip this ad entirely if it doesn't have a valid #XXXX
+        # skip if no ad number
         return None
 
     sug_yehida = parse_between(text_content, "סוג יחידה")
@@ -167,14 +125,11 @@ def parse_job_info(post_id: int, html_content: str):
     unit_info = parse_section(text_content, "פרטים על היחידה")
     service_terms = parse_section(text_content, "תנאי שירות")
 
-    # Parse the raw service period line
+    # parse service period
     service_period_raw = parse_between(text_content, "תקופת שירות הקרובה")
     month_start, month_end = parse_service_period(service_period_raw)
 
-    # Immediate recruitment
     immediate = "כן" if "⏰" in text_content else "לא"
-
-    # Temporary or permanent
     recruitment_type = "זמני או קבוע" if "🔊 זמני או קבוע" in text_content else ""
 
     if not roles:
@@ -190,27 +145,20 @@ def parse_job_info(post_id: int, html_content: str):
             "כישורים נדרשים": qualifications,
             "פרטים על היחידה": unit_info,
             "תנאי שירות": service_terms,
-
-            # Add our raw period string plus the parsed start/end
-            "תקופת שירות (Raw)": service_period_raw,  
-            "חודש התחלה": month_start,  
-            "חודש סיום": month_end,     
-
+            "תקופת שירות (Raw)": service_period_raw,
+            "חודש התחלה": month_start,
+            "חודש סיום": month_end,
             "גיוס מיידי": immediate,
             "סוג גיוס": recruitment_type,
             "קישור": f"{BASE_URL}{post_id}"
         }
         results.append(row)
-
     return results
 
-# -----------------------------------------------------------
-# SCRAPING WITH MULTITHREADING
-# -----------------------------------------------------------
+# -----------------------------
+# DOWNLOAD HTML
+# -----------------------------
 def download_html(post_id: int):
-    """
-    Download HTML for a given post ID, returning (post_id, html_content).
-    """
     url = f"{BASE_URL}{post_id}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -221,46 +169,36 @@ def download_html(post_id: int):
         pass
     return post_id, None
 
-
+# -----------------------------
+# SCRAPE (Multithread)
+# -----------------------------
 @st.cache_data
 def scrape_jobs_concurrent(start_id: int, end_id: int) -> pd.DataFrame:
-    """
-    Download and parse all posts in [start_id..end_id] concurrently.
-    Returns a DataFrame of job postings.
-    """
     data = []
-    # 1) Download
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        html_results = list(executor.map(download_html, range(start_id, end_id + 1)))
+        html_results = list(executor.map(download_html, range(start_id, end_id+1)))
 
-    # 2) Parse
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         parsed_lists = list(executor.map(lambda x: parse_job_info(x[0], x[1]), html_results))
 
-    # 3) Flatten
     for plist in parsed_lists:
         if plist:
             data.extend(plist)
 
     return pd.DataFrame(data)
 
-# -----------------------------------------------------------
+# -----------------------------
 # FUZZY MATCH HELPER
-# -----------------------------------------------------------
+# -----------------------------
 def fuzzy_score_row(row, query):
-    """
-    Combine all row values into one normalized string,
-    compute partial-ratio score with the normalized query.
-    """
     row_text = " ".join(str(v) for v in row.values)
     row_text = normalize_hebrew(row_text)
     query = normalize_hebrew(query)
-
     return fuzz.partial_ratio(query.lower(), row_text.lower())
 
-# -----------------------------------------------------------
+# -----------------------------
 # MAIN APP
-# -----------------------------------------------------------
+# -----------------------------
 st.title("📌 חיפוש הזדמנויות גיוס")
 
 with st.spinner("🔄 טוען מודעות..."):
@@ -272,7 +210,7 @@ st.header("סינון וחיפוש")
 
 search_query = st.text_input("🔎 חיפוש חופשי (בכל השדות):", "")
 
-# Define dropdowns, but no filtering yet
+# existing filters
 all_areas = ["(הכל)"] + sorted(set(df["אזור בארץ"].dropna()))
 selected_area = st.selectbox("סינון לפי אזור בארץ:", all_areas, index=0)
 
@@ -282,24 +220,35 @@ selected_unit = st.selectbox("סינון לפי סוג יחידה:", all_units, 
 immediate_opts = ["(הכל)", "כן", "לא"]
 selected_immediate = st.selectbox("סינון לפי גיוס מיידי:", immediate_opts, index=0)
 
-# If no filters or query, show message and stop
+# new month filters
+all_start_months = ["(הכל)"] + sorted(set(df["חודש התחלה"].dropna()))
+selected_month_start = st.selectbox("סינון לפי חודש התחלה:", all_start_months, index=0)
+
+all_end_months = ["(הכל)"] + sorted(set(df["חודש סיום"].dropna()))
+selected_month_end = st.selectbox("סינון לפי חודש סיום:", all_end_months, index=0)
+
+# check if user applied any filter or typed search
 filters_used = (
     search_query.strip() != "" or
     selected_area != "(הכל)" or
     selected_unit != "(הכל)" or
-    selected_immediate != "(הכל)"
+    selected_immediate != "(הכל)" or
+    selected_month_start != "(הכל)" or
+    selected_month_end != "(הכל)"
 )
 
 if not filters_used:
     st.info("אנא הזן חיפוש או הגדר סינון כדי לראות תוצאות.")
     st.stop()
 
-# Filter the data
+# -----------------------------
+# Apply filters
+# -----------------------------
 filtered_df = df.copy()
 
-# 1) Fuzzy search (if user typed anything)
+# 1) Fuzzy search
 if search_query.strip():
-    threshold = 70  # Adjust as desired
+    threshold = 70
     scores = filtered_df.apply(lambda r: fuzzy_score_row(r, search_query), axis=1)
     filtered_df = filtered_df[scores >= threshold]
 
@@ -313,6 +262,15 @@ if selected_unit != "(הכל)":
 if selected_immediate != "(הכל)":
     filtered_df = filtered_df[filtered_df["גיוס מיידי"] == selected_immediate]
 
+if selected_month_start != "(הכל)":
+    filtered_df = filtered_df[filtered_df["חודש התחלה"] == selected_month_start]
+
+if selected_month_end != "(הכל)":
+    filtered_df = filtered_df[filtered_df["חודש סיום"] == selected_month_end]
+
+# -----------------------------
+# Show results
+# -----------------------------
 st.write(f"נמצאו {len(filtered_df)} תוצאות:")
 
 if len(filtered_df) == 0:
@@ -323,4 +281,3 @@ else:
         role = row["תפקיד"]
         link = row["קישור"]
         st.markdown(f"- **{role}** (מודעה #{ad_number}): [קישור לפרטים]({link})")
-
