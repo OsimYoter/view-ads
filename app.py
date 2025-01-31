@@ -50,7 +50,7 @@ st.markdown(
 arrow_escaped = re.escape("⬅️")
 
 # -----------------------------------------------------------
-# TEXT NORMALIZATION FOR HEBREW
+# TEXT NORMALIZATION FOR HEBREW (Fuzzy Searching)
 # -----------------------------------------------------------
 def normalize_hebrew(text: str) -> str:
     """
@@ -65,6 +65,26 @@ def normalize_hebrew(text: str) -> str:
     for ch in ['״', '"', "'"]:
         text = text.replace(ch, "")
     return text
+
+# -----------------------------------------------------------
+# PARSE SERVICE PERIOD (Months)
+# -----------------------------------------------------------
+def parse_service_period(text: str) -> (str, str):
+    """
+    If text is in the format "מרץ - אפריל",
+    return (start_month, end_month). Otherwise ('', '').
+    Example:
+      text = "מרץ - אפריל" => ("מרץ", "אפריל")
+      text = "ינואר-פברואר" => ("ינואר", "פברואר")
+    """
+    text = text.strip()
+    # For example "מרץ - אפריל"
+    # We'll look for "X - Y" with optional spaces
+    pattern = r"^\s*(\S+)\s*-\s*(\S+)\s*$"
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1), match.group(2)
+    return "", ""
 
 # -----------------------------------------------------------
 # REGEX PARSING FUNCTIONS
@@ -146,7 +166,10 @@ def parse_job_info(post_id: int, html_content: str):
     qualifications = parse_section(text_content, "כישורים נדרשים")
     unit_info = parse_section(text_content, "פרטים על היחידה")
     service_terms = parse_section(text_content, "תנאי שירות")
-    next_service = parse_between(text_content, "תקופת שירות הקרובה")
+
+    # Parse the raw service period line
+    service_period_raw = parse_between(text_content, "תקופת שירות הקרובה")
+    month_start, month_end = parse_service_period(service_period_raw)
 
     # Immediate recruitment
     immediate = "כן" if "⏰" in text_content else "לא"
@@ -167,7 +190,12 @@ def parse_job_info(post_id: int, html_content: str):
             "כישורים נדרשים": qualifications,
             "פרטים על היחידה": unit_info,
             "תנאי שירות": service_terms,
-            "תקופת שירות קרובה": next_service,
+
+            # Add our raw period string plus the parsed start/end
+            "תקופת שירות (Raw)": service_period_raw,  
+            "חודש התחלה": month_start,  
+            "חודש סיום": month_end,     
+
             "גיוס מיידי": immediate,
             "סוג גיוס": recruitment_type,
             "קישור": f"{BASE_URL}{post_id}"
@@ -175,7 +203,6 @@ def parse_job_info(post_id: int, html_content: str):
         results.append(row)
 
     return results
-
 
 # -----------------------------------------------------------
 # SCRAPING WITH MULTITHREADING
@@ -272,8 +299,7 @@ filtered_df = df.copy()
 
 # 1) Fuzzy search (if user typed anything)
 if search_query.strip():
-    # For each row, compute partial-ratio score (0..100)
-    threshold = 70  # Adjust as you wish
+    threshold = 70  # Adjust as desired
     scores = filtered_df.apply(lambda r: fuzzy_score_row(r, search_query), axis=1)
     filtered_df = filtered_df[scores >= threshold]
 
@@ -297,3 +323,4 @@ else:
         role = row["תפקיד"]
         link = row["קישור"]
         st.markdown(f"- **{role}** (מודעה #{ad_number}): [קישור לפרטים]({link})")
+
