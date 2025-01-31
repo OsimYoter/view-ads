@@ -72,6 +72,55 @@ def parse_service_period(text: str) -> (str, str):
     return "", ""
 
 # -----------------------------
+# PARSE P'TOR / MAAGAR
+# -----------------------------
+def parse_exempt_line(text: str):
+    """
+    Look for a line that starts with either ⛔ or 🖐🏻 and references פטור or מאגר.
+    We'll return two booleans: (relevant_ptor, relevant_maagar),
+    which can be True/False or None if unknown.
+    """
+    # Regex for a line containing either '⛔' or '🖐🏻', plus 'פטור' or 'מאגר',
+    # near the end, just before "לפרטים נוספים והגשת מועמדות" or a dashed line.
+    # We'll just find the FIRST occurrence with "⛔" or "🖐🏻" that mentions 'פטור' or 'מאגר'.
+    pattern = r"[⛔🖐🏻].*?(?:פטור|מאגר).*"
+    match = re.search(pattern, text)
+    if not match:
+        return (None, None)  # Not found => no info
+
+    line = match.group(0)
+
+    # Start by defaulting to None
+    ptor = None
+    maagar = None
+
+    # ---- Check P'TOR ----
+    # "לא רלוונטי לבעלי \"פטור\"" => ptor=False
+    # "רלוונטי גם לבעלי \"פטור\"" => ptor=True
+    # "לא פטור" => ptor=False
+    if "לא רלוונטי לבעלי \"פטור\"" in line:
+        ptor = False
+    elif "לבעלי \"פטור\"" in line:
+        # e.g. "רלוונטי גם לבעלי \"פטור\"" or "מתאים לבעלי \"פטור\""
+        ptor = True
+    if "(לא פטור!)" in line:
+        # explicitly says not ptor
+        ptor = False
+
+    # ---- Check MA'AGAR ----
+    # "לא רלוונטי למשוייכים ל\"מאגר\"" => maagar=False
+    # "משוייכים ל\"מאגר\"" => maagar=True
+    # or if line includes "למשוייכים ל\"מאגר\" (לא פטור!)" => maagar=True, ptor=False
+    if "לא רלוונטי" in line and "משוייכים ל\"מאגר\"" in line:
+        maagar = False
+    elif "משוייכים ל\"מאגר\"" in line:
+        # e.g. "רלוונטי גם לבעלי \"פטור\" / משוייכים ל\"מאגר\""
+        if maagar is None:
+            maagar = True
+
+    return (ptor, maagar)
+
+# -----------------------------
 # REGEX PARSING
 # -----------------------------
 def parse_ad_number(text: str) -> str:
@@ -79,20 +128,11 @@ def parse_ad_number(text: str) -> str:
     return match.group(1) if match else "לא נמצא"
 
 def parse_between(text: str, start_marker: str) -> str:
-    """
-    General 'between' parser for lines like:
-        <start_marker>: <value>
-    up to a dashed line or arrow or end of string.
-    """
     pattern = rf"{start_marker}\s*:\s*([\s\S]*?)(?=\n-+\s|\n{arrow_escaped}|$)"
     m = re.search(pattern, text)
     return m.group(1).strip() if m else ""
 
 def parse_section(text: str, section_title: str) -> str:
-    """
-    For multiline sections that start with "⬅️ <section_title>:"
-    until next arrow or dashes or end.
-    """
     pattern = rf"{arrow_escaped}\s*{section_title}\s*:\s*([\s\S]*?)(?=\n{arrow_escaped}|\n-+\s|$)"
     m = re.search(pattern, text)
     if not m:
@@ -136,8 +176,7 @@ def parse_job_info(post_id: int, html_content: str):
     unit_info = parse_section(text_content, "פרטים על היחידה")
     service_terms = parse_section(text_content, "תנאי שירות")
 
-    # 3) Remove "אזור בארץ..." from the סוג יחידה text if present
-    #    e.g. "בה\"ד אזור בארץ: צפון" => "בה\"ד"
+    # 3) Remove trailing "אזור בארץ" from sug_yehida if present
     if "אזור בארץ:" in sug_yehida:
         sug_yehida = sug_yehida.split("אזור בארץ:")[0].strip()
 
@@ -149,6 +188,23 @@ def parse_job_info(post_id: int, html_content: str):
     immediate = "כן" if "⏰" in text_content else "לא"
     recruitment_type = "זמני או קבוע" if "🔊 זמני או קבוע" in text_content else ""
 
+    # 6) Parse p'tor / maagar
+    ptor_bool, maagar_bool = parse_exempt_line(text_content)
+    # We'll store them as strings "כן" / "לא" / "" for easy filtering
+    if ptor_bool is True:
+        ptor_str = "כן"
+    elif ptor_bool is False:
+        ptor_str = "לא"
+    else:
+        ptor_str = ""  # unknown
+
+    if maagar_bool is True:
+        maagar_str = "כן"
+    elif maagar_bool is False:
+        maagar_str = "לא"
+    else:
+        maagar_str = ""  # unknown
+
     if not roles:
         roles = ["לא צוינו תפקידים"]
 
@@ -157,7 +213,7 @@ def parse_job_info(post_id: int, html_content: str):
         row = {
             "מספר מודעה": ad_number,
             "תפקיד": role,
-            "סוג יחידה": sug_yehida,      # now stripped of trailing "אזור בארץ:"
+            "סוג יחידה": sug_yehida,
             "אזור בארץ": area,
             "כישורים נדרשים": qualifications,
             "פרטים על היחידה": unit_info,
@@ -167,6 +223,9 @@ def parse_job_info(post_id: int, html_content: str):
             "חודש סיום": month_end,
             "גיוס מיידי": immediate,
             "סוג גיוס": recruitment_type,
+            # new fields for פטור / מאגר
+            "מתאים לבעלי פטור": ptor_str,     
+            "מתאים למשוייכים למאגר": maagar_str,
             "קישור": f"{BASE_URL}{post_id}"
         }
         results.append(row)
@@ -234,12 +293,19 @@ selected_area = st.selectbox("סינון לפי אזור בארץ:", all_areas, 
 all_units = ["(הכל)"] + sorted(set(df["סוג יחידה"].dropna()))
 selected_unit = st.selectbox("סינון לפי סוג יחידה:", all_units, index=0)
 
-# new month filters
+# month filters
 all_start_months = ["(הכל)"] + sorted(set(df["חודש התחלה"].dropna()))
 selected_month_start = st.selectbox("סינון לפי חודש התחלה:", all_start_months, index=0)
 
 all_end_months = ["(הכל)"] + sorted(set(df["חודש סיום"].dropna()))
 selected_month_end = st.selectbox("סינון לפי חודש סיום:", all_end_months, index=0)
+
+# new filters for פטור and מאגר
+all_ptor = ["(הכל)", "מתאים לבעלי פטור", "לא מתאים לבעלי פטור"]
+selected_ptor = st.selectbox("סינון לפי פטור:", all_ptor, index=0)
+
+all_maagar = ["(הכל)", "מתאים למשוייכים למאגר", "לא מתאים למשוייכים למאגר"]
+selected_maagar = st.selectbox("סינון לפי מאגר:", all_maagar, index=0)
 
 # check if user applied any filter or typed search
 filters_used = (
@@ -247,7 +313,9 @@ filters_used = (
     selected_area != "(הכל)" or
     selected_unit != "(הכל)" or
     selected_month_start != "(הכל)" or
-    selected_month_end != "(הכל)"
+    selected_month_end != "(הכל)" or
+    selected_ptor != "(הכל)" or
+    selected_maagar != "(הכל)"
 )
 
 if not filters_used:
@@ -277,6 +345,18 @@ if selected_month_start != "(הכל)":
 
 if selected_month_end != "(הכל)":
     filtered_df = filtered_df[filtered_df["חודש סיום"] == selected_month_end]
+
+# Filter by פטור
+if selected_ptor == "מתאים לבעלי פטור":
+    filtered_df = filtered_df[filtered_df["מתאים לבעלי פטור"] == "כן"]
+elif selected_ptor == "לא מתאים לבעלי פטור":
+    filtered_df = filtered_df[filtered_df["מתאים לבעלי פטור"] == "לא"]
+
+# Filter by מאגר
+if selected_maagar == "מתאים למשוייכים למאגר":
+    filtered_df = filtered_df[filtered_df["מתאים למשוייכים למאגר"] == "כן"]
+elif selected_maagar == "לא מתאים למשוייכים למאגר":
+    filtered_df = filtered_df[filtered_df["מתאים למשוייכים למאגר"] == "לא"]
 
 # -----------------------------
 # Show results
